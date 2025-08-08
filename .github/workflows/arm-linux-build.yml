@@ -17,7 +17,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          repository: your-username/vmrp  # 替换为你的仓库地址
+          repository: StarCatL/vmrp  # 替换为你的仓库地址
           submodules: true  # 若有子模块需拉取
 
       - name: Set up cross-compilation environment
