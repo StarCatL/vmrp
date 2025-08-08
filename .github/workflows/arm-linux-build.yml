@@ -3,45 +3,48 @@ name: ARM Linux Build for Emuelec4.7
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]  # 触发构建的分支
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # 匹配glibc版本要求
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
-        arch: [aarch64]  # 针对S905L3A的Arm64架构
+        arch: [aarch64]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          repository: StarCatL/vmrp  # 替换为你的仓库地址
-          submodules: true  # 若有子模块需拉取
+          repository: StarCatL/vmrp
+          submodules: true
+
+      - name: Set up QEMU for ARM64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+          sudo update-binfmts --enable qemu-aarch64
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
       - name: Set up cross-compilation environment
         run: |
-          # 添加ARM64架构
+          # 添加ARM64架构支持
           sudo dpkg --add-architecture arm64
           
-          # 替换apt源为Ubuntu官方ARM64端口源（解决404问题）
-          sudo tee /etc/apt/sources.list <<EOF
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
-          
-          # ARM64架构专用源
+          # 配置APT源
+          sudo tee /etc/apt/sources.list.d/arm64.list <<EOF
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
           EOF
           
-          # 更新源并安装依赖
+          # 更新软件包列表
           sudo apt-get update
+          
+          # 安装ARM64依赖
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
@@ -51,46 +54,40 @@ jobs:
             wget \
             unzip
 
-          # 安装unicorn和capstone（Arm64版本）
-          # unicorn
-          wget https://github.com/unicorn-engine/unicorn/releases/download/1.0.2/unicorn-1.0.2-linux-aarch64.tar.gz
-          tar -zxf unicorn-1.0.2-linux-aarch64.tar.gz
-          sudo cp -r unicorn-1.0.2-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
-          sudo cp -r unicorn-1.0.2-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
+      - name: Install unicorn and capstone
+        run: |
+          # 使用正确的ARM64预编译包
+          wget https://github.com/unicorn-engine/unicorn/releases/download/2.0.1/unicorn-2.0.1-linux-aarch64.tar.gz
+          tar -zxf unicorn-2.0.1-linux-aarch64.tar.gz
+          sudo cp -r unicorn-2.0.1-linux-aarch64/include/* /usr/aarch64-linux-gnu/include/
+          sudo cp -r unicorn-2.0.1-linux-aarch64/lib/* /usr/aarch64-linux-gnu/lib/
           
-          # capstone（调试模式依赖）
-          wget https://github.com/aquynh/capstone/releases/download/4.0.1/capstone-4.0.1-linux-arm64.tar.gz
-          tar -zxf capstone-4.0.1-linux-arm64.tar.gz
-          sudo cp -r capstone-4.0.1-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
-          sudo cp -r capstone-4.0.1-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
+          wget https://github.com/capstone-engine/capstone/releases/download/5.0.1/capstone-5.0.1-aarch64.tar.gz
+          tar -zxf capstone-5.0.1-aarch64.tar.gz
+          sudo cp -r capstone-5.0.1-aarch64/include/* /usr/aarch64-linux-gnu/include/
+          sudo cp -r capstone-5.0.1-aarch64/lib/* /usr/aarch64-linux-gnu/lib/
 
       - name: Build mythroad module
         run: |
           cd mythroad
-          # 交叉编译mythroad（独立项目）
           make CC=aarch64-linux-gnu-gcc \
                AR=aarch64-linux-gnu-ar \
-               CFLAGS="-m64 -I/usr/aarch64-linux-gnu/include" \
+               CFLAGS="-I/usr/aarch64-linux-gnu/include" \
                LDFLAGS="-L/usr/aarch64-linux-gnu/lib" \
-               full  # 或根据需求选择mini目标
+               full
 
       - name: Build main vmrp
         run: |
-          # 编译主程序，指定交叉编译器和库路径
           make CC=aarch64-linux-gnu-gcc \
-               CFLAGS="-m64 -DVMRP -I/usr/aarch64-linux-gnu/include" \
+               CFLAGS="-DVMRP -I/usr/aarch64-linux-gnu/include" \
                LDFLAGS="-L/usr/aarch64-linux-gnu/lib -lSDL2 -lunicorn -lz -lm" \
-               DEBUG=0  # 禁用调试模式以减少依赖
+               DEBUG=0
 
       - name: Prepare output
         run: |
-          # 创建输出目录并收集文件
           mkdir -p vmrp-arm64
           cp ./bin/vmrp ./vmrp-arm64/
-          # 复制依赖的动态库（根据实际运行需求）
-          cp /usr/aarch64-linux-gnu/lib/libSDL2-2.0.so.0 ./vmrp-arm64/
-          cp /usr/aarch64-linux-gnu/lib/libunicorn.so.1 ./vmrp-arm64/
-          cp /usr/aarch64-linux-gnu/lib/libz.so.1 ./vmrp-arm64/
+          aarch64-linux-gnu-strip ./vmrp-arm64/vmrp
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
