@@ -2,27 +2,25 @@ name: ARM Linux Build for Emuelec4.7
 
 on:
   push:
-    branches: [ main ]  # 触发构建的分支
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # 匹配glibc版本要求
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
-        arch: [aarch64]  # 针对S905L3A的Arm64架构
+        arch: [aarch64]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          repository: StarCatL/vmrp  # 替换为你的仓库地址
-          submodules: true  # 若有子模块需拉取
+          submodules: true
 
-      - name: Set up cross-compilation environment
+      - name: Setup dependencies
         run: |
-          # 安装Arm64交叉编译工具链和依赖
           sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y \
@@ -30,53 +28,51 @@ jobs:
             g++-aarch64-linux-gnu \
             libsdl2-dev:arm64 \
             zlib1g-dev:arm64 \
-            make \
-            wget \
-            unzip
+            make cmake \
+            wget unzip
 
-          # 安装unicorn和capstone（Arm64版本）
-          # unicorn
-          wget https://github.com/unicorn-engine/unicorn/releases/download/1.0.2/unicorn-1.0.2-linux-arm64.tar.gz
-          tar -zxf unicorn-1.0.2-linux-arm64.tar.gz
-          sudo cp -r unicorn-1.0.2-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
-          sudo cp -r unicorn-1.0.2-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
+      - name: Build Unicorn from source
+        run: |
+          wget https://github.com/unicorn-engine/unicorn/archive/refs/tags/1.0.2.zip
+          unzip 1.0.2.zip
+          cd unicorn-1.0.2
+          mkdir build && cd build
+          cmake .. -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+                   -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+                   -DCMAKE_INSTALL_PREFIX=/usr/aarch64-linux-gnu
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
 
-          # capstone（调试模式依赖）
-          wget https://github.com/aquynh/capstone/releases/download/4.0.1/capstone-4.0.1-linux-arm64.tar.gz
-          tar -zxf capstone-4.0.1-linux-arm64.tar.gz
-          sudo cp -r capstone-4.0.1-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
-          sudo cp -r capstone-4.0.1-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
-
-      - name: Build mythroad module
+      - name: Build MythRoad
         run: |
           cd mythroad
-          # 交叉编译mythroad（独立项目）
           make CC=aarch64-linux-gnu-gcc \
                AR=aarch64-linux-gnu-ar \
-               CFLAGS="-m64 -I/usr/aarch64-linux-gnu/include" \
+               CFLAGS="-DVMRP -I/usr/aarch64-linux-gnu/include" \
                LDFLAGS="-L/usr/aarch64-linux-gnu/lib" \
-               full  # 或根据需求选择mini目标
+               full
 
-      - name: Build main vmrp
+      - name: Build main VMRP
         run: |
-          # 编译主程序，指定交叉编译器和库路径
+          cd vmrp  # 关键修复：进入正确目录
           make CC=aarch64-linux-gnu-gcc \
-               CFLAGS="-m64 -DVMRP -I/usr/aarch64-linux-gnu/include" \
+               CFLAGS="-DVMRP -I/usr/aarch64-linux-gnu/include" \
                LDFLAGS="-L/usr/aarch64-linux-gnu/lib -lSDL2 -lunicorn -lz -lm" \
-               DEBUG=0  # 禁用调试模式以减少依赖
+               DEBUG=0
 
       - name: Prepare output
         run: |
-          # 创建输出目录并收集文件
           mkdir -p vmrp-arm64
-          cp ./bin/vmrp ./vmrp-arm64/
-          # 复制依赖的动态库（根据实际运行需求）
-          cp /usr/aarch64-linux-gnu/lib/libSDL2-2.0.so.0 ./vmrp-arm64/
-          cp /usr/aarch64-linux-gnu/lib/libunicorn.so.1 ./vmrp-arm64/
-          cp /usr/aarch64-linux-gnu/lib/libz.so.1 ./vmrp-arm64/
+          cp vmrp/bin/vmrp vmrp-arm64/  # 修复输出路径
+          
+          # 复制依赖库（使用实际路径）
+          cp /usr/aarch64-linux-gnu/lib/libunicorn.so.1 vmrp-arm64/
+          cp /usr/aarch64-linux-gnu/lib/libz.so.1 vmrp-arm64/
+          cp /usr/aarch64-linux-gnu/lib/libSDL2-2.0.so.0 vmrp-arm64/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: vmrp-emuelec-s905l3a
-          path: vmrp-arm64/
+          path: vmrp-arm64
