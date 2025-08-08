@@ -53,8 +53,8 @@ jobs:
 
           # 安装unicorn和capstone（Arm64版本）
           # unicorn
-          wget https://github.com/unicorn-engine/unicorn/releases/download/1.0.2/unicorn-1.0.2-linux-arm64.tar.gz
-          tar -zxf unicorn-1.0.2-linux-arm64.tar.gz
+          wget https://github.com/unicorn-engine/unicorn/releases/download/1.0.2/unicorn-1.0.2-linux-aarch64.tar.gz
+          tar -zxf unicorn-1.0.2-linux-aarch64.tar.gz
           sudo cp -r unicorn-1.0.2-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
           sudo cp -r unicorn-1.0.2-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
           
