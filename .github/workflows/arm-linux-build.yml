@@ -21,48 +21,48 @@ jobs:
           repository: StarCatL/vmrp  # 替换为你的仓库地址
           submodules: true  # 若有子模块需拉取
 
-- name: Set up cross-compilation environment
-  run: |
-    # 添加ARM64架构
-    sudo dpkg --add-architecture arm64
-    
-    # 替换apt源为Ubuntu官方ARM64端口源（解决404问题）
-    sudo tee /etc/apt/sources.list <<EOF
-    deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
-    deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-    deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
-    deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
-    
-    # ARM64架构专用源
-    deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
-    deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
-    deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
-    deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
-    EOF
-    
-    # 更新源并安装依赖
-    sudo apt-get update
-    sudo apt-get install -y \
-      gcc-aarch64-linux-gnu \
-      g++-aarch64-linux-gnu \
-      libsdl2-dev:arm64 \
-      zlib1g-dev:arm64 \
-      make \
-      wget \
-      unzip
+      - name: Set up cross-compilation environment
+        run: |
+          # 添加ARM64架构
+          sudo dpkg --add-architecture arm64
+          
+          # 替换apt源为Ubuntu官方ARM64端口源（解决404问题）
+          sudo tee /etc/apt/sources.list <<EOF
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          
+          # ARM64架构专用源
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
+          EOF
+          
+          # 更新源并安装依赖
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libsdl2-dev:arm64 \
+            zlib1g-dev:arm64 \
+            make \
+            wget \
+            unzip
 
-    # 安装unicorn和capstone（Arm64版本）
-    # unicorn
-    wget https://github.com/unicorn-engine/unicorn/releases/download/1.0.2/unicorn-1.0.2-linux-arm64.tar.gz
-    tar -zxf unicorn-1.0.2-linux-arm64.tar.gz
-    sudo cp -r unicorn-1.0.2-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
-    sudo cp -r unicorn-1.0.2-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
-    
-    # capstone（调试模式依赖）
-    wget https://github.com/aquynh/capstone/releases/download/4.0.1/capstone-4.0.1-linux-arm64.tar.gz
-    tar -zxf capstone-4.0.1-linux-arm64.tar.gz
-    sudo cp -r capstone-4.0.1-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
-    sudo cp -r capstone-4.0.1-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
+          # 安装unicorn和capstone（Arm64版本）
+          # unicorn
+          wget https://github.com/unicorn-engine/unicorn/releases/download/1.0.2/unicorn-1.0.2-linux-arm64.tar.gz
+          tar -zxf unicorn-1.0.2-linux-arm64.tar.gz
+          sudo cp -r unicorn-1.0.2-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
+          sudo cp -r unicorn-1.0.2-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
+          
+          # capstone（调试模式依赖）
+          wget https://github.com/aquynh/capstone/releases/download/4.0.1/capstone-4.0.1-linux-arm64.tar.gz
+          tar -zxf capstone-4.0.1-linux-arm64.tar.gz
+          sudo cp -r capstone-4.0.1-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
+          sudo cp -r capstone-4.0.1-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
 
       - name: Build mythroad module
         run: |
