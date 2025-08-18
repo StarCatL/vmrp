@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7 (Fix CMake Format)
+name: ARM Linux Build for Emuelec4.7 (Fix Capstone)
 
 on:
   workflow_dispatch:
@@ -53,15 +53,13 @@ jobs:
             git \
             cmake
 
-      - name: Build Unicorn Engine (Fixed CMake Command)
+      - name: Build Unicorn Engine
         run: |
           git clone https://github.com/unicorn-engine/unicorn.git
           cd unicorn
           git checkout 1.0.3
           
           mkdir build && cd build
-          
-          # 修复：确保所有CMake参数在同一行命令中，用反斜杠正确换行（无多余空格）
           cmake .. \
             -DCMAKE_SYSTEM_NAME=Linux \
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
@@ -81,12 +79,13 @@ jobs:
           cd ../..
           sudo ldconfig
 
-      - name: Build Capstone
+      - name: Build Capstone (Fixed cross-compile parameter)
         run: |
           wget https://github.com/capstone-engine/capstone/archive/4.0.2.tar.gz -O capstone.tar.gz
           tar -zxf capstone.tar.gz
           cd capstone-4.0.2
-          ./make.sh cross-${{ env.ARCH }}
+          # 修复：Capstone 对 ARM64 的交叉编译参数为 cross-aarch64（而非 cross-arm64）
+          ./make.sh cross-aarch64
           sudo make install PREFIX=/usr/${{ env.TOOLCHAIN }}
           cd ..
 
@@ -94,7 +93,7 @@ jobs:
         run: |
           export CC=${{ env.TOOLCHAIN }}-gcc
           export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2"
-          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0 -lz"
+          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0 -lz -lcapstone"
           
           cd mythroad && make full && cd ..
           make VMRP=1 DEBUG=0
