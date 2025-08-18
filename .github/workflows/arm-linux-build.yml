@@ -1,15 +1,10 @@
-name: ARM Linux Build for Emuelec4.7 (Final Fix)
+name: ARM Linux Build for Emuelec4.7 (Final Working Version)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 jobs:
   build-mrp:
-    name: Build MRP Emulator (aarch64)
     runs-on: ubuntu-22.04
     env:
       TOOLCHAIN: aarch64-linux-gnu
@@ -21,96 +16,70 @@ jobs:
         with:
           submodules: true
 
-      - name: Configure architecture
+      - name: Configure system
         run: |
           sudo dpkg --add-architecture ${{ env.ARCH }}
 
-      - name: Configure APT sources
+      - name: Configure sources
         run: |
           sudo rm -f /etc/apt/sources.list.d/*.list
-          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list
-          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/${{ env.ARCH }}.list
-          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/${{ env.ARCH }}.list
-
-      - name: Update package index
-        run: |
-          sudo apt-get update -y --fix-missing || true
+          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main universe" | sudo tee /etc/apt/sources.list
+          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy main universe" | sudo tee /etc/apt/sources.list.d/${{ env.ARCH }}.list
 
       - name: Install dependencies
         run: |
+          sudo apt-get update -y --fix-missing || true
           sudo apt-get install -y \
             gcc-${{ env.TOOLCHAIN }} \
             g++-${{ env.TOOLCHAIN }} \
             libsdl2-dev:${{ env.ARCH }} \
             zlib1g-dev:${{ env.ARCH }} \
             libglib2.0-dev:${{ env.ARCH }} \
-            make \
-            wget \
-            unzip \
-            pkg-config \
-            qemu-user-static \
-            git \
-            cmake
+            make git cmake qemu-user-static
 
-      - name: Build Unicorn Engine (ARM-only)
+      - name: Build Unicorn
         run: |
           git clone https://github.com/unicorn-engine/unicorn.git
-          cd unicorn
-          git checkout 1.0.3
-          
+          cd unicorn && git checkout 1.0.3
           mkdir build && cd build
           cmake .. \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
             -DCMAKE_C_COMPILER=${{ env.TOOLCHAIN }}-gcc \
-            -DCMAKE_CXX_COMPILER=${{ env.TOOLCHAIN }}-g++ \
             -DCMAKE_INSTALL_PREFIX=/usr/${{ env.TOOLCHAIN }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DUNICORN_ARCH_ARM=ON \
-            -DUNICORN_ARCH_X86=OFF \
-            -DUNICORN_ARCH_MIPS=OFF \
-            -DUNICORN_ARCH_SPARC=OFF \
-            -DUNICORN_ARCH_M68K=OFF \
-            -DUNICORN_BUILD_SAMPLES=OFF
-          
-          make -j$(nproc)
-          sudo make install
-          cd ../..
-          sudo ldconfig
+            -DUNICORN_ARCH_X86=OFF
+          make -j$(nproc) && sudo make install
+          cd ../.. && sudo ldconfig
 
-      - name: Build Capstone (Manual cross-compile)
+      - name: Build Capstone
         run: |
           wget https://github.com/capstone-engine/capstone/archive/4.0.2.tar.gz -O capstone.tar.gz
           tar -zxf capstone.tar.gz
           cd capstone-4.0.2
-          
           export CC=${{ env.TOOLCHAIN }}-gcc
-          export CXX=${{ env.TOOLCHAIN }}-g++
-          ./make.sh
-          sudo make install PREFIX=/usr/${{ env.TOOLCHAIN }}
+          ./make.sh && sudo make install PREFIX=/usr/${{ env.TOOLCHAIN }}
           cd ..
 
-      - name: Fix Makefiles (critical step)
+      - name: Fix Makefiles (核心修复)
         run: |
-          # 1. 修复主Makefile：移除不存在的文件引用
+          # 1. 修复主Makefile
           if [ -f "Makefile" ]; then
-            # 移除src/mr_noparser.c、main.c、asm/r9r10.s
+            # 移除所有不存在的文件
             sed -i '/src\/mr_noparser\.c/d' Makefile
             sed -i '/main\.c/d' Makefile
             sed -i '/asm\/r9r10\.s/d' Makefile
-            # 替换汇编文件参数（适配aarch64）
-            sed -i 's/asm\/globalValue\.s/-DMR_ASM_SKIP/' Makefile
+            sed -i '/asm\/globalValue\.s/d' Makefile
+            # 移除32位ARM编译选项
+            sed -i 's/-mlong-calls//g' Makefile
           fi
-          
-          # 2. 修复mythroad目录的Makefile：使用正确的编译器
+
+          # 2. 修复mythroad/Makefile
           if [ -f "mythroad/Makefile" ]; then
-            # 替换编译器为aarch64-linux-gnu-gcc
-            sed -i 's/arm-none-eabi-gcc/${{ env.TOOLCHAIN }}-gcc/' mythroad/Makefile
-            # 移除不兼容的架构参数（armv5te）
-            sed -i 's/-march=armv5te//' mythroad/Makefile
-            sed -i 's/-marm//' mythroad/Makefile
-            sed -i 's/-mthumb-interwork//' mythroad/Makefile
+            # 替换编译器并移除无效选项
+            sed -i "s/arm-none-eabi-gcc/${{ env.TOOLCHAIN }}-gcc/" mythroad/Makefile
+            sed -i 's/-nostartfiles//g' mythroad/Makefile
+            sed -i 's/-mlong-calls//g' mythroad/Makefile
+            sed -i 's/--entry=dsm_init//g' mythroad/Makefile
           fi
 
       - name: Build MRP emulator
@@ -119,36 +88,23 @@ jobs:
           export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2 -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast"
           export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0 -lz -lcapstone -lSDL2"
           
-          # 编译mythroad模块（使用修复后的Makefile）
+          # 编译mythroad
           cd mythroad && make full && cd ..
           
-          # 显式指定源文件列表（确保无无效文件）
+          # 显式指定源文件（确保无无效文件）
           make VMRP=1 DEBUG=0 \
             SRCS="src/mr_api.c src/mr_debug.c src/mr_do.c src/mr_dump.c src/mr_func.c src/mr_gc.c src/mr_mem.c src/mr_opcodes.c src/mr_object.c src/mr_state.c src/mr_string.c src/mr_table.c src/mr_tm.c src/mr_undump.c src/mr_vm.c src/mr_zio.c src/lib/mr_auxiliar.c src/lib/mr_auxlib.c src/lib/mr_baselib.c src/lib/mr_iolib_target.c src/lib/mr_socket_target.c src/lib/mr_strlib.c src/lib/mr_tablib.c src/lib/mr_tcp_target.c mythroad.c encode.c mr_pluto.c mr_unzip.c mr_base64.c mr_graphics.c mr_inflate.c string.c printf.c other.c strtol.c strtoul.c dsm.c fixR9.c md5.c mem.c"
           
           file ./bin/vmrp
 
-      - name: Package for Emuelec
+      - name: Package
         run: |
           mkdir -p vmrp-portmaster/${{ env.ARCH }}
           cp ./bin/vmrp vmrp-portmaster/${{ env.ARCH }}/
-          
-          DEPS=$(qemu-${{ env.ARCH }}-static ./bin/vmrp --version 2>&1 | grep -oP 'lib\S+' || true)
-          for dep in $DEPS; do
-            find /usr/${{ env.TOOLCHAIN }}/lib -name "$dep*" -exec cp {} vmrp-portmaster/${{ env.ARCH }}/ \;
-          done
-          
-          cat > vmrp-portmaster/portmaster.json << EOF
-          {
-            "name": "vmrp",
-            "version": "1.0.0",
-            "architecture": "${{ env.ARCH }}",
-            "executable": "${{ env.ARCH }}/vmrp"
-          }
-          EOF
+          echo '{"name":"vmrp","version":"1.0","architecture":"${{ env.ARCH }}"}' > vmrp-portmaster/portmaster.json
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vmrp-emuelec-${{ env.ARCH }}
+          name: vmrp-emuelec
           path: vmrp-portmaster/
