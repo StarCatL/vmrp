@@ -9,10 +9,18 @@ on:
 
 jobs:
   build:
+    name: Build mrp emulator (${{ matrix.arch }})
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false
       matrix:
         arch: [aarch64]
+        include:
+          - arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            compiler: aarch64-linux-gnu-gcc
+            libdir: /usr/aarch64-linux-gnu/lib
+            includedir: /usr/aarch64-linux-gnu/include
 
     steps:
       - name: Checkout code
@@ -20,95 +28,127 @@ jobs:
         with:
           submodules: true
 
-      - name: Set up cross-compilation environment
+      - name: Configure APT sources
         run: |
-          # 添加ARM64架构支持
+          # 仅保留必要的架构源配置
           sudo dpkg --add-architecture arm64
           
-          # 清理现有源配置，避免冲突
-          sudo rm -f /etc/apt/sources.list.d/*.list
-          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-          sudo sed -i '/security.ubuntu.com/d' /etc/apt/sources.list
-          sudo sed -i '/ports.ubuntu.com/d' /etc/apt/sources.list
+          # 清理默认源中的ARM64引用
+          sudo sed -i '/deb.*arm64/d' /etc/apt/sources.list
           
-          # 仅保留AMD64的基础源（用于主机工具）
-          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list
-          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-          
-          # 添加ARM64架构专用源（ports.ubuntu.com是ARM64官方源）
+          # 添加ARM64专用源（ports.ubuntu.com为官方ARM源）
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-          
-          # 更新源并安装依赖
+
+      - name: Install build dependencies
+        run: |
           sudo apt-get update -y --fix-missing
           sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
+            gcc-${{ matrix.compiler }} \
+            g++-${{ matrix.compiler }} \
             libsdl2-dev:arm64 \
             zlib1g-dev:arm64 \
             make \
             wget \
             unzip \
-            build-essential
+            build-essential \
+            pkg-config
 
-          # 安装unicorn（Arm64版本）
+      - name: Install unicorn engine (ARM64)
+        run: |
+          # 安装预编译的unicorn库
           wget https://github.com/unicorn-engine/unicorn/releases/download/1.0.2/unicorn-1.0.2-linux-arm64.tar.gz
           tar -zxf unicorn-1.0.2-linux-arm64.tar.gz
-          sudo cp -r unicorn-1.0.2-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
-          sudo cp -r unicorn-1.0.2-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
+          sudo cp -r unicorn-1.0.2-linux-arm64/include/* ${{ matrix.includedir }}/
+          sudo cp -r unicorn-1.0.2-linux-arm64/lib/* ${{ matrix.libdir }}/
+          sudo ldconfig
 
-          # 安装capstone（交叉编译ARM64版本）
+      - name: Build capstone (cross-compile)
+        run: |
           wget https://github.com/capstone-engine/capstone/archive/refs/tags/4.0.2.tar.gz -O capstone-4.0.2.tar.gz
           tar -zxf capstone-4.0.2.tar.gz
           cd capstone-4.0.2
-          ./make.sh cross-aarch64
-          sudo make install PREFIX=/usr/aarch64-linux-gnu
+          ./make.sh cross-${{ matrix.arch }}
+          sudo make install PREFIX=/usr/${{ matrix.arch }}-linux-gnu
           cd ..
 
       - name: Build mythroad module
         run: |
           cd mythroad
-          make CC=aarch64-linux-gnu-gcc \
-               AR=aarch64-linux-gnu-ar \
-               CFLAGS="-m64 -I/usr/aarch64-linux-gnu/include" \
-               LDFLAGS="-L/usr/aarch64-linux-gnu/lib" \
+          make CC=${{ matrix.compiler }} \
+               AR=${{ matrix.arch }}-linux-gnu-ar \
+               CFLAGS="-I${{ matrix.includedir }} -Wall -O2" \
+               LDFLAGS="-L${{ matrix.libdir }}" \
                full
 
-      - name: Build main vmrp
+      - name: Build main vmrp emulator
         run: |
-          make CC=aarch64-linux-gnu-gcc \
-               CFLAGS="-m64 -DVMRP -I/usr/aarch64-linux-gnu/include" \
-               LDFLAGS="-L/usr/aarch64-linux-gnu/lib -lSDL2 -lunicorn -lz -lm" \
+          make CC=${{ matrix.compiler }} \
+               CFLAGS="-DVMRP -I${{ matrix.includedir }} -march=armv8-a -mtune=cortex-a53 -O2" \
+               LDFLAGS="-L${{ matrix.libdir }} -lSDL2 -lunicorn -lz -lm -ldl" \
                DEBUG=0
+          # 验证编译结果
+          file ./bin/vmrp
 
       - name: Prepare PortMaster package
         run: |
-          # 创建符合PortMaster规范的目录结构
-          mkdir -p vmrp-portmaster/aarch64
-          cp ./bin/vmrp ./vmrp-portmaster/aarch64/
+          # 创建标准目录结构
+          mkdir -p vmrp-portmaster/${{ matrix.arch }}
+          cp ./bin/vmrp vmrp-portmaster/${{ matrix.arch }}/
           
-          # 复制依赖库
-          cp /usr/aarch64-linux-gnu/lib/libSDL2-2.0.so.0 ./vmrp-portmaster/aarch64/
-          cp /usr/aarch64-linux-gnu/lib/libunicorn.so.1 ./vmrp-portmaster/aarch64/
-          cp /usr/aarch64-linux-gnu/lib/libz.so.1 ./vmrp-portmaster/aarch64/
+          # 收集依赖库
+          LIB_DEPS=$(ldd ./bin/vmrp | grep -v 'not found' | awk '/lib/ {print $1}')
+          for lib in $LIB_DEPS; do
+            find ${{ matrix.libdir }} -name $lib -exec cp {} vmrp-portmaster/${{ matrix.arch }}/ \;
+          done
           
-          # 创建PortMaster元数据
-          cat > ./vmrp-portmaster/portmaster.json << EOF
+          # 创建元数据文件
+          cat > vmrp-portmaster/portmaster.json << EOF
           {
             "name": "vmrp",
-            "version": "1.0",
+            "version": "1.0.0",
             "author": "Your Name",
-            "architecture": "aarch64",
+            "architecture": "${{ matrix.arch }}",
             "runtime": "mesa_pkg_0.1.squashfs",
-            "executable": "aarch64/vmrp",
-            "description": "VMRP - 冒泡社区游戏启动器"
+            "executable": "${{ matrix.arch }}/vmrp",
+            "description": "VMRP - MRP emulator for Emuelec",
+            "file_types": ["mrp"],
+            "launcher": "default"
           }
           EOF
 
-      - name: Upload artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vmrp-emuelec-s905l3a
+          name: vmrp-emuelec-${{ matrix.arch }}
           path: vmrp-portmaster/
+          retention-days: 14
+
+  test-build:
+    name: Verify build package
+    needs: build
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        arch: [aarch64]
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vmrp-emuelec-${{ matrix.arch }}
+          path: test
+
+      - name: Verify package structure
+        run: |
+          tree test/
+          cat test/portmaster.json
+          file test/${{ matrix.arch }}/vmrp
+
+      - name: Test with QEMU
+        run: |
+          # 安装ARM64模拟器
+          sudo apt-get install -y qemu-user-static
+          # 尝试运行模拟器
+          qemu-${{ matrix.arch }}-static test/${{ matrix.arch }}/vmrp --help || echo "Expected non-zero exit for help command"
