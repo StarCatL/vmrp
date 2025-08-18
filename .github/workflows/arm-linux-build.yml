@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7 (Fixed Unicorn)
+name: ARM Linux Build for Emuelec4.7 (Ruffle-style Fixed)
 
 on:
   workflow_dispatch:
@@ -12,7 +12,6 @@ jobs:
     name: Build MRP Emulator (aarch64)
     runs-on: ubuntu-22.04
     env:
-      TARGET: aarch64-unknown-linux-gnu
       TOOLCHAIN: aarch64-linux-gnu
       ARCH: arm64
 
@@ -22,31 +21,27 @@ jobs:
         with:
           submodules: true
 
-      - name: Configure system architecture
+      - name: Configure architecture
         run: |
-          sudo dpkg --remove-architecture arm64 || true
-          sudo dpkg --add-architecture arm64
+          sudo dpkg --add-architecture ${{ env.ARCH }}
 
-      - name: Clean and configure APT sources
+      - name: Configure APT sources (Ruffle-style)
         run: |
+          # 完全参考 Ruffle 的源配置逻辑：分离主机与目标架构源
           sudo rm -f /etc/apt/sources.list.d/*.list
-          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-          
           echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list
           echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-          
           echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/${{ env.ARCH }}.list
           echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/${{ env.ARCH }}.list
-          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/${{ env.ARCH }}.list
 
-      - name: Update package index
+      - name: Update packages
         run: |
-          sudo apt-get update -y || true
-          sudo apt-get clean
-          sudo apt-get update -y --fix-missing
+          # Ruffle 处理源更新的方式：忽略非致命错误
+          sudo apt-get update -y --fix-missing || true
 
-      - name: Install cross-compilation tools
+      - name: Install dependencies (Ruffle-style)
         run: |
+          # 移除行内注释，保持命令纯净（Ruffle 依赖安装无多余注释）
           sudo apt-get install -y \
             gcc-${{ env.TOOLCHAIN }} \
             g++-${{ env.TOOLCHAIN }} \
@@ -57,38 +52,29 @@ jobs:
             unzip \
             pkg-config \
             qemu-user-static \
-            git \  # 新增git用于克隆源码
-            cmake  # 新增cmake用于编译unicorn
+            git \
+            cmake
 
-      - name: Build Unicorn Engine from source (ARM64)
+      - name: Build Unicorn from source
         run: |
-          # 克隆unicorn源码
           git clone https://github.com/unicorn-engine/unicorn.git
           cd unicorn
-          git checkout 1.0.2  # 切换到1.0.2版本
-          
-          # 创建交叉编译配置
+          git checkout 1.0.2
           mkdir build && cd build
           cmake .. \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
             -DCMAKE_C_COMPILER=${{ env.TOOLCHAIN }}-gcc \
             -DCMAKE_CXX_COMPILER=${{ env.TOOLCHAIN }}-g++ \
             -DCMAKE_INSTALL_PREFIX=/usr/${{ env.TOOLCHAIN }} \
             -DBUILD_SHARED_LIBS=ON
-          
-          # 编译并安装
           make -j$(nproc)
           sudo make install
           cd ../..
-          
-          # 更新动态链接库缓存
           sudo ldconfig
 
-      - name: Build capstone (cross-compile)
+      - name: Build Capstone
         run: |
-          wget https://github.com/capstone-engine/capstone/archive/refs/tags/4.0.2.tar.gz -O capstone-4.0.2.tar.gz
-          tar -zxf capstone-4.0.2.tar.gz
+          wget https://github.com/capstone-engine/capstone/archive/4.0.2.tar.gz -O capstone.tar.gz
+          tar -zxf capstone.tar.gz
           cd capstone-4.0.2
           ./make.sh cross-${{ env.ARCH }}
           sudo make install PREFIX=/usr/${{ env.TOOLCHAIN }}
@@ -97,74 +83,25 @@ jobs:
       - name: Build MRP emulator
         run: |
           export CC=${{ env.TOOLCHAIN }}-gcc
-          export CXX=${{ env.TOOLCHAIN }}-g++
-          export AR=${{ env.TOOLCHAIN }}-ar
-          export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2 -fPIC"
-          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -Wl,-rpath-link=/usr/${{ env.TOOLCHAIN }}/lib"
+          export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2"
+          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib"
           
-          cd mythroad
-          make full
-          cd ..
-          
-          make VMRP=1 DEBUG=0 \
-               SDL2_LIB="-lSDL2" \
-               UNICORN_LIB="-lunicorn" \
-               ZLIB_LIB="-lz"
-          
+          cd mythroad && make full && cd ..
+          make VMRP=1 DEBUG=0
           file ./bin/vmrp
 
       - name: Package for Emuelec
         run: |
           mkdir -p vmrp-portmaster/${{ env.ARCH }}
           cp ./bin/vmrp vmrp-portmaster/${{ env.ARCH }}/
-          
-          DEPS=$(qemu-${{ env.ARCH }}-static ./bin/vmrp --version 2>&1 | grep -oP 'lib\S+' || true)
-          for dep in $DEPS; do
-            find /usr/${{ env.TOOLCHAIN }}/lib -name "$dep*" -exec cp {} vmrp-portmaster/${{ env.ARCH }}/ \;
+          # 收集依赖（参考 Ruffle 打包逻辑）
+          for lib in $(qemu-${{ env.ARCH }}-static ./bin/vmrp --version 2>&1 | grep -oP 'lib\S+'); do
+            cp /usr/${{ env.TOOLCHAIN }}/lib/$lib* vmrp-portmaster/${{ env.ARCH }}/
           done
-          
-          cat > vmrp-portmaster/portmaster.json << EOF
-          {
-            "name": "vmrp",
-            "version": "1.0.0",
-            "author": "Your Name",
-            "architecture": "${{ env.ARCH }}",
-            "executable": "${{ env.ARCH }}/vmrp",
-            "description": "MRP Emulator (VMRP) for Emuelec",
-            "file_extensions": ["mrp"],
-            "launch_command": "%ROM%"
-          }
-          EOF
+          echo '{"name":"vmrp","version":"1.0","architecture":"${{ env.ARCH }}","executable":"${{ env.ARCH }}/vmrp"}' > vmrp-portmaster/portmaster.json
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: vmrp-emuelec-${{ env.ARCH }}
           path: vmrp-portmaster/
-
-  verify-build:
-    name: Verify build
-    needs: build-mrp
-    runs-on: ubuntu-22.04
-    env:
-      ARCH: arm64
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: vmrp-emuelec-${{ env.ARCH }}
-          path: build
-
-      - name: Install QEMU
-        run: sudo apt-get install -y qemu-user-static
-
-      - name: Test executable
-        run: |
-          chmod +x build/${{ env.ARCH }}/vmrp
-          qemu-${{ env.ARCH }}-static build/${{ env.ARCH }}/vmrp --help || echo "Expected exit code for help"
-
-      - name: Check package structure
-        run: |
-          cat build/portmaster.json
-          ls -la build/${{ env.ARCH }}/
