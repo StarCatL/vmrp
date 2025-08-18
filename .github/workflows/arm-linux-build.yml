@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7
+name: ARM Linux Build for Emuelec4.7 (Ruffle-style)
 
 on:
   workflow_dispatch:
@@ -8,19 +8,13 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
-    name: Build mrp emulator (${{ matrix.arch }})
+  build-mrp:
+    name: Build MRP Emulator (aarch64)
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [aarch64]
-        include:
-          - arch: aarch64
-            target: aarch64-unknown-linux-gnu
-            compiler: aarch64-linux-gnu-gcc
-            libdir: /usr/aarch64-linux-gnu/lib
-            includedir: /usr/aarch64-linux-gnu/include
+    env:
+      TARGET: aarch64-unknown-linux-gnu
+      TOOLCHAIN: aarch64-linux-gnu
+      ARCH: arm64
 
     steps:
       - name: Checkout code
@@ -28,40 +22,55 @@ jobs:
         with:
           submodules: true
 
-      - name: Configure APT sources
+      - name: Configure system architecture
         run: |
-          # 仅保留必要的架构源配置
+          # 先移除可能导致冲突的ARM64架构配置
+          sudo dpkg --remove-architecture arm64 || true
+          # 重新添加ARM64架构
           sudo dpkg --add-architecture arm64
-          
-          # 清理默认源中的ARM64引用
-          sudo sed -i '/deb.*arm64/d' /etc/apt/sources.list
-          
-          # 添加ARM64专用源（ports.ubuntu.com为官方ARM源）
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
 
-      - name: Install build dependencies
+      - name: Clean and configure APT sources (Ruffle-style)
         run: |
+          # 完全清理现有源配置
+          sudo rm -f /etc/apt/sources.list.d/*.list
+          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+          
+          # 仅保留AMD64的基础源（用于主机工具）
+          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list
+          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          
+          # 添加ARM64专用源（完全使用ports.ubuntu.com，不使用security.ubuntu.com）
+          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/${{ env.ARCH }}.list
+          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/${{ env.ARCH }}.list
+          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/${{ env.ARCH }}.list
+
+      - name: Update package index
+        run: |
+          # 忽略错误继续执行，类似Ruffle处理方式
+          sudo apt-get update -y || true
+          # 强制清理并重新生成缓存
+          sudo apt-get clean
           sudo apt-get update -y --fix-missing
+
+      - name: Install cross-compilation tools (Ruffle-style)
+        run: |
           sudo apt-get install -y \
-            gcc-${{ matrix.compiler }} \
-            g++-${{ matrix.compiler }} \
-            libsdl2-dev:arm64 \
-            zlib1g-dev:arm64 \
+            gcc-${{ env.TOOLCHAIN }} \
+            g++-${{ env.TOOLCHAIN }} \
+            libsdl2-dev:${{ env.ARCH }} \
+            zlib1g-dev:${{ env.ARCH }} \
             make \
             wget \
             unzip \
-            build-essential \
-            pkg-config
+            pkg-config \
+            qemu-user-static
 
-      - name: Install unicorn engine (ARM64)
+      - name: Install unicorn engine (prebuilt)
         run: |
-          # 安装预编译的unicorn库
-          wget https://github.com/unicorn-engine/unicorn/releases/download/1.0.2/unicorn-1.0.2-linux-arm64.tar.gz
-          tar -zxf unicorn-1.0.2-linux-arm64.tar.gz
-          sudo cp -r unicorn-1.0.2-linux-arm64/include/* ${{ matrix.includedir }}/
-          sudo cp -r unicorn-1.0.2-linux-arm64/lib/* ${{ matrix.libdir }}/
+          wget https://github.com/unicorn-engine/unicorn/releases/download/1.0.2/unicorn-1.0.2-linux-${{ env.ARCH }}.tar.gz
+          tar -zxf unicorn-1.0.2-linux-${{ env.ARCH }}.tar.gz
+          sudo cp -r unicorn-1.0.2-linux-${{ env.ARCH }}/include/* /usr/${{ env.TOOLCHAIN }}/include/
+          sudo cp -r unicorn-1.0.2-linux-${{ env.ARCH }}/lib/* /usr/${{ env.TOOLCHAIN }}/lib/
           sudo ldconfig
 
       - name: Build capstone (cross-compile)
@@ -69,86 +78,88 @@ jobs:
           wget https://github.com/capstone-engine/capstone/archive/refs/tags/4.0.2.tar.gz -O capstone-4.0.2.tar.gz
           tar -zxf capstone-4.0.2.tar.gz
           cd capstone-4.0.2
-          ./make.sh cross-${{ matrix.arch }}
-          sudo make install PREFIX=/usr/${{ matrix.arch }}-linux-gnu
+          ./make.sh cross-${{ env.ARCH }}
+          sudo make install PREFIX=/usr/${{ env.TOOLCHAIN }}
           cd ..
 
-      - name: Build mythroad module
+      - name: Build MRP emulator
         run: |
+          # 交叉编译配置（参考Ruffle的编译参数）
+          export CC=${{ env.TOOLCHAIN }}-gcc
+          export CXX=${{ env.TOOLCHAIN }}-g++
+          export AR=${{ env.TOOLCHAIN }}-ar
+          export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2 -fPIC"
+          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -Wl,-rpath-link=/usr/${{ env.TOOLCHAIN }}/lib"
+          
+          # 构建mythroad模块
           cd mythroad
-          make CC=${{ matrix.compiler }} \
-               AR=${{ matrix.arch }}-linux-gnu-ar \
-               CFLAGS="-I${{ matrix.includedir }} -Wall -O2" \
-               LDFLAGS="-L${{ matrix.libdir }}" \
-               full
-
-      - name: Build main vmrp emulator
-        run: |
-          make CC=${{ matrix.compiler }} \
-               CFLAGS="-DVMRP -I${{ matrix.includedir }} -march=armv8-a -mtune=cortex-a53 -O2" \
-               LDFLAGS="-L${{ matrix.libdir }} -lSDL2 -lunicorn -lz -lm -ldl" \
-               DEBUG=0
-          # 验证编译结果
+          make full
+          cd ..
+          
+          # 构建主程序
+          make VMRP=1 DEBUG=0 \
+               SDL2_LIB="-lSDL2" \
+               UNICORN_LIB="-lunicorn" \
+               ZLIB_LIB="-lz"
+          
+          # 验证二进制格式
           file ./bin/vmrp
 
-      - name: Prepare PortMaster package
+      - name: Package for Emuelec (PortMaster format)
         run: |
-          # 创建标准目录结构
-          mkdir -p vmrp-portmaster/${{ matrix.arch }}
-          cp ./bin/vmrp vmrp-portmaster/${{ matrix.arch }}/
+          mkdir -p vmrp-portmaster/${{ env.ARCH }}
+          cp ./bin/vmrp vmrp-portmaster/${{ env.ARCH }}/
           
-          # 收集依赖库
-          LIB_DEPS=$(ldd ./bin/vmrp | grep -v 'not found' | awk '/lib/ {print $1}')
-          for lib in $LIB_DEPS; do
-            find ${{ matrix.libdir }} -name $lib -exec cp {} vmrp-portmaster/${{ matrix.arch }}/ \;
+          # 收集运行时依赖（参考Ruffle的打包方式）
+          DEPS=$(qemu-${{ env.ARCH }}-static ./bin/vmrp --version 2>&1 | grep -oP 'lib\S+' || true)
+          for dep in $DEPS; do
+            find /usr/${{ env.TOOLCHAIN }}/lib -name "$dep*" -exec cp {} vmrp-portmaster/${{ env.ARCH }}/ \;
           done
           
-          # 创建元数据文件
+          # 创建元数据
           cat > vmrp-portmaster/portmaster.json << EOF
           {
             "name": "vmrp",
             "version": "1.0.0",
             "author": "Your Name",
-            "architecture": "${{ matrix.arch }}",
-            "runtime": "mesa_pkg_0.1.squashfs",
-            "executable": "${{ matrix.arch }}/vmrp",
-            "description": "VMRP - MRP emulator for Emuelec",
-            "file_types": ["mrp"],
-            "launcher": "default"
+            "architecture": "${{ env.ARCH }}",
+            "executable": "${{ env.ARCH }}/vmrp",
+            "description": "MRP Emulator (VMRP) for Emuelec",
+            "file_extensions": ["mrp"],
+            "launch_command": "%ROM%"
           }
           EOF
 
-      - name: Upload build artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vmrp-emuelec-${{ matrix.arch }}
+          name: vmrp-emuelec-${{ env.ARCH }}
           path: vmrp-portmaster/
-          retention-days: 14
 
-  test-build:
-    name: Verify build package
-    needs: build
+  verify-build:
+    name: Verify build
+    needs: build-mrp
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        arch: [aarch64]
+    env:
+      ARCH: arm64
 
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: vmrp-emuelec-${{ matrix.arch }}
-          path: test
+          name: vmrp-emuelec-${{ env.ARCH }}
+          path: build
 
-      - name: Verify package structure
-        run: |
-          tree test/
-          cat test/portmaster.json
-          file test/${{ matrix.arch }}/vmrp
+      - name: Install QEMU
+        run: sudo apt-get install -y qemu-user-static
 
-      - name: Test with QEMU
+      - name: Test executable
         run: |
-          # 安装ARM64模拟器
-          sudo apt-get install -y qemu-user-static
-          # 尝试运行模拟器
-          qemu-${{ matrix.arch }}-static test/${{ matrix.arch }}/vmrp --help || echo "Expected non-zero exit for help command"
+          chmod +x build/${{ env.ARCH }}/vmrp
+          # 测试程序能否运行（至少能显示版本信息）
+          qemu-${{ env.ARCH }}-static build/${{ env.ARCH }}/vmrp --help || echo "Expected exit code for help"
+
+      - name: Check package structure
+        run: |
+          cat build/portmaster.json
+          ls -la build/${{ env.ARCH }}/
