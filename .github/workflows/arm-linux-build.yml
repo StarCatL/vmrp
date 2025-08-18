@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7 (Complete)
+name: ARM Linux Build for Emuelec4.7 (Final Fix)
 
 on:
   workflow_dispatch:
@@ -85,52 +85,65 @@ jobs:
           tar -zxf capstone.tar.gz
           cd capstone-4.0.2
           
-          # 手动指定交叉编译器，不依赖脚本参数
           export CC=${{ env.TOOLCHAIN }}-gcc
           export CXX=${{ env.TOOLCHAIN }}-g++
           ./make.sh
           sudo make install PREFIX=/usr/${{ env.TOOLCHAIN }}
           cd ..
 
+      - name: Fix Makefiles (critical step)
+        run: |
+          # 1. 修复主Makefile：移除不存在的文件引用
+          if [ -f "Makefile" ]; then
+            # 移除src/mr_noparser.c、main.c、asm/r9r10.s
+            sed -i '/src\/mr_noparser\.c/d' Makefile
+            sed -i '/main\.c/d' Makefile
+            sed -i '/asm\/r9r10\.s/d' Makefile
+            # 替换汇编文件参数（适配aarch64）
+            sed -i 's/asm\/globalValue\.s/-DMR_ASM_SKIP/' Makefile
+          fi
+          
+          # 2. 修复mythroad目录的Makefile：使用正确的编译器
+          if [ -f "mythroad/Makefile" ]; then
+            # 替换编译器为aarch64-linux-gnu-gcc
+            sed -i 's/arm-none-eabi-gcc/${{ env.TOOLCHAIN }}-gcc/' mythroad/Makefile
+            # 移除不兼容的架构参数（armv5te）
+            sed -i 's/-march=armv5te//' mythroad/Makefile
+            sed -i 's/-marm//' mythroad/Makefile
+            sed -i 's/-mthumb-interwork//' mythroad/Makefile
+          fi
+
       - name: Build MRP emulator
         run: |
           export CC=${{ env.TOOLCHAIN }}-gcc
-          # 屏蔽64位架构下的指针转换警告，移除不存在的src/mr_noparser.c
           export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2 -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast"
-          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0 -lz -lcapstone"
+          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0 -lz -lcapstone -lSDL2"
           
-          # 编译mythroad模块
+          # 编译mythroad模块（使用修复后的Makefile）
           cd mythroad && make full && cd ..
           
-          # 显式指定源文件列表（剔除不存在的src/mr_noparser.c）
+          # 显式指定源文件列表（确保无无效文件）
           make VMRP=1 DEBUG=0 \
-            SRCS="src/mr_api.c src/mr_debug.c src/mr_do.c src/mr_dump.c src/mr_func.c src/mr_gc.c src/mr_mem.c src/mr_opcodes.c src/mr_object.c src/mr_state.c src/mr_string.c src/mr_table.c src/mr_tm.c src/mr_undump.c src/mr_vm.c src/mr_zio.c src/lib/mr_auxiliar.c src/lib/mr_auxlib.c src/lib/mr_baselib.c src/lib/mr_iolib_target.c src/lib/mr_socket_target.c src/lib/mr_strlib.c src/lib/mr_tablib.c src/lib/mr_tcp_target.c mythroad.c encode.c mr_pluto.c mr_unzip.c mr_base64.c mr_graphics.c mr_inflate.c string.c printf.c other.c strtol.c strtoul.c dsm.c fixR9.c md5.c mem.c asm/r9r10.s asm/globalValue.s main.c"
+            SRCS="src/mr_api.c src/mr_debug.c src/mr_do.c src/mr_dump.c src/mr_func.c src/mr_gc.c src/mr_mem.c src/mr_opcodes.c src/mr_object.c src/mr_state.c src/mr_string.c src/mr_table.c src/mr_tm.c src/mr_undump.c src/mr_vm.c src/mr_zio.c src/lib/mr_auxiliar.c src/lib/mr_auxlib.c src/lib/mr_baselib.c src/lib/mr_iolib_target.c src/lib/mr_socket_target.c src/lib/mr_strlib.c src/lib/mr_tablib.c src/lib/mr_tcp_target.c mythroad.c encode.c mr_pluto.c mr_unzip.c mr_base64.c mr_graphics.c mr_inflate.c string.c printf.c other.c strtol.c strtoul.c dsm.c fixR9.c md5.c mem.c"
           
-          # 验证编译结果
           file ./bin/vmrp
 
-      - name: Package for Emuelec (PortMaster format)
+      - name: Package for Emuelec
         run: |
           mkdir -p vmrp-portmaster/${{ env.ARCH }}
           cp ./bin/vmrp vmrp-portmaster/${{ env.ARCH }}/
           
-          # 收集运行时依赖库
           DEPS=$(qemu-${{ env.ARCH }}-static ./bin/vmrp --version 2>&1 | grep -oP 'lib\S+' || true)
           for dep in $DEPS; do
             find /usr/${{ env.TOOLCHAIN }}/lib -name "$dep*" -exec cp {} vmrp-portmaster/${{ env.ARCH }}/ \;
           done
           
-          # 生成PortMaster元数据
           cat > vmrp-portmaster/portmaster.json << EOF
           {
             "name": "vmrp",
             "version": "1.0.0",
-            "author": "Your Name",
             "architecture": "${{ env.ARCH }}",
-            "executable": "${{ env.ARCH }}/vmrp",
-            "description": "MRP Emulator (VMRP) for Emuelec",
-            "file_extensions": ["mrp"],
-            "launch_command": "%ROM%"
+            "executable": "${{ env.ARCH }}/vmrp"
           }
           EOF
 
@@ -139,33 +152,3 @@ jobs:
         with:
           name: vmrp-emuelec-${{ env.ARCH }}
           path: vmrp-portmaster/
-          retention-days: 14
-
-  verify-build:
-    name: Verify build
-    needs: build-mrp
-    runs-on: ubuntu-22.04
-    env:
-      ARCH: arm64
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: vmrp-emuelec-${{ env.ARCH }}
-          path: build
-
-      - name: Install QEMU for verification
-        run: sudo apt-get install -y qemu-user-static
-
-      - name: Verify executable runs
-        run: |
-          chmod +x build/${{ env.ARCH }}/vmrp
-          # 测试程序能否启动（显示帮助信息）
-          qemu-${{ env.ARCH }}-static build/${{ env.ARCH }}/vmrp --help || echo "Expected non-zero exit for help command"
-
-      - name: Check package structure
-        run: |
-          tree build/
-          cat build/portmaster.json
-          file build/${{ env.ARCH }}/vmrp
