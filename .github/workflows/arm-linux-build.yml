@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7 (Ruffle-style Fixed)
+name: ARM Linux Build for Emuelec4.7 (Fixed Unicorn)
 
 on:
   workflow_dispatch:
@@ -25,28 +25,24 @@ jobs:
         run: |
           sudo dpkg --add-architecture ${{ env.ARCH }}
 
-      - name: Configure APT sources (Ruffle-style)
+      - name: Configure APT sources
         run: |
-          # 完全参考 Ruffle 的源配置逻辑：分离主机与目标架构源
           sudo rm -f /etc/apt/sources.list.d/*.list
           echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list
           echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
           echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/${{ env.ARCH }}.list
           echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/${{ env.ARCH }}.list
 
-      - name: Update packages
+      - name: Install dependencies (including GLib)
         run: |
-          # Ruffle 处理源更新的方式：忽略非致命错误
           sudo apt-get update -y --fix-missing || true
-
-      - name: Install dependencies (Ruffle-style)
-        run: |
-          # 移除行内注释，保持命令纯净（Ruffle 依赖安装无多余注释）
+          # 安装GLib（解决g_*函数缺失）和其他必要依赖
           sudo apt-get install -y \
             gcc-${{ env.TOOLCHAIN }} \
             g++-${{ env.TOOLCHAIN }} \
             libsdl2-dev:${{ env.ARCH }} \
             zlib1g-dev:${{ env.ARCH }} \
+            libglib2.0-dev:${{ env.ARCH }} \  # 关键：添加GLib开发库
             make \
             wget \
             unzip \
@@ -55,20 +51,32 @@ jobs:
             git \
             cmake
 
-      - name: Build Unicorn from source
+      - name: Build Unicorn Engine (ARM-only)
         run: |
           git clone https://github.com/unicorn-engine/unicorn.git
           cd unicorn
-          git checkout 1.0.2
-          mkdir build && cd build
-          cmake .. \
-            -DCMAKE_C_COMPILER=${{ env.TOOLCHAIN }}-gcc \
-            -DCMAKE_CXX_COMPILER=${{ env.TOOLCHAIN }}-g++ \
-            -DCMAKE_INSTALL_PREFIX=/usr/${{ env.TOOLCHAIN }} \
-            -DBUILD_SHARED_LIBS=ON
+          # 使用较新的稳定版本（1.0.3修复了部分交叉编译问题）
+          git checkout 1.0.3
+          
+          # 配置仅支持ARM架构，禁用其他架构和示例程序
+          ./configure \
+            --prefix=/usr/${{ env.TOOLCHAIN }} \
+            --cross-prefix=${{ env.TOOLCHAIN }}- \
+            --enable-static \
+            --disable-shared \
+            --enable-arm \  # 仅启用ARM架构
+            --disable-x86 \
+            --disable-mips \
+            --disable-sparc \
+            --disable-m68k \
+            --disable-sample \  # 禁用示例程序（避免x86依赖）
+            --extra-cflags="-I/usr/${{ env.TOOLCHAIN }}/include" \
+            --extra-ldflags="-L/usr/${{ env.TOOLCHAIN }}/lib"
+          
+          # 编译并安装
           make -j$(nproc)
           sudo make install
-          cd ../..
+          cd ..
           sudo ldconfig
 
       - name: Build Capstone
@@ -84,7 +92,7 @@ jobs:
         run: |
           export CC=${{ env.TOOLCHAIN }}-gcc
           export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2"
-          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib"
+          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0"  # 链接GLib
           
           cd mythroad && make full && cd ..
           make VMRP=1 DEBUG=0
@@ -94,7 +102,6 @@ jobs:
         run: |
           mkdir -p vmrp-portmaster/${{ env.ARCH }}
           cp ./bin/vmrp vmrp-portmaster/${{ env.ARCH }}/
-          # 收集依赖（参考 Ruffle 打包逻辑）
           for lib in $(qemu-${{ env.ARCH }}-static ./bin/vmrp --version 2>&1 | grep -oP 'lib\S+'); do
             cp /usr/${{ env.TOOLCHAIN }}/lib/$lib* vmrp-portmaster/${{ env.ARCH }}/
           done
