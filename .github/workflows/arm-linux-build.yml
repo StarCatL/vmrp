@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7 (Final Fix)
+name: ARM Linux Build for Emuelec4.7 (Fix Unicorn Configure)
 
 on:
   workflow_dispatch:
@@ -37,9 +37,8 @@ jobs:
         run: |
           sudo apt-get update -y --fix-missing || true
 
-      - name: Install dependencies (fixed syntax)
+      - name: Install dependencies
         run: |
-          # 修复：确保每个包名独立一行，反斜杠后无空格/注释
           sudo apt-get install -y \
             gcc-${{ env.TOOLCHAIN }} \
             g++-${{ env.TOOLCHAIN }} \
@@ -54,27 +53,36 @@ jobs:
             git \
             cmake
 
-      - name: Build Unicorn Engine (ARM-only)
+      - name: Build Unicorn Engine (CMake version)
         run: |
           git clone https://github.com/unicorn-engine/unicorn.git
           cd unicorn
-          git checkout 1.0.3
-          ./configure \
-            --prefix=/usr/${{ env.TOOLCHAIN }} \
-            --cross-prefix=${{ env.TOOLCHAIN }}- \
-            --enable-static \
-            --disable-shared \
-            --enable-arm \
-            --disable-x86 \
-            --disable-mips \
-            --disable-sparc \
-            --disable-m68k \
-            --disable-sample \
-            --extra-cflags="-I/usr/${{ env.TOOLCHAIN }}/include" \
-            --extra-ldflags="-L/usr/${{ env.TOOLCHAIN }}/lib"
+          git checkout 1.0.3  # 切换到1.0.3版本
+          
+          # 创建构建目录
+          mkdir build && cd build
+          
+          # CMake配置（替代原有的./configure）
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=${{ env.TOOLCHAIN }}-gcc \
+            -DCMAKE_CXX_COMPILER=${{ env.TOOLCHAIN }}-g++ \
+            -DCMAKE_INSTALL_PREFIX=/usr/${{ env.TOOLCHAIN }} \
+            -DBUILD_SHARED_LIBS=OFF \  # 静态链接，避免运行时依赖问题
+            -DUNICORN_ARCH_ARM=ON \    # 仅启用ARM架构
+            -DUNICORN_ARCH_X86=OFF \
+            -DUNICORN_ARCH_MIPS=OFF \
+            -DUNICORN_ARCH_SPARC=OFF \
+            -DUNICORN_ARCH_M68K=OFF \
+            -DUNICORN_BUILD_SAMPLES=OFF  # 禁用示例程序
+          
+          # 编译并安装
           make -j$(nproc)
           sudo make install
-          cd ..
+          cd ../..
+          
+          # 更新链接库缓存
           sudo ldconfig
 
       - name: Build Capstone
@@ -90,7 +98,7 @@ jobs:
         run: |
           export CC=${{ env.TOOLCHAIN }}-gcc
           export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2"
-          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0"
+          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0 -lz"
           
           cd mythroad && make full && cd ..
           make VMRP=1 DEBUG=0
