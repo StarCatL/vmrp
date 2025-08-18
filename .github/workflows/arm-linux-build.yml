@@ -25,17 +25,24 @@ jobs:
           # 添加ARM64架构支持
           sudo dpkg --add-architecture arm64
           
-          # 修复APT源问题：禁用安全仓库中的ARM64架构
-          sudo sed -i 's/^deb http:\/\/security.ubuntu.com\/ubuntu.*//g' /etc/apt/sources.list
-          sudo sed -i 's/^deb-src http:\/\/security.ubuntu.com\/ubuntu.*//g' /etc/apt/sources.list
+          # 清理现有源配置，避免冲突
+          sudo rm -f /etc/apt/sources.list.d/*.list
+          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+          sudo sed -i '/security.ubuntu.com/d' /etc/apt/sources.list
+          sudo sed -i '/ports.ubuntu.com/d' /etc/apt/sources.list
           
-          # 添加ARM64兼容的Ubuntu PPA源
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          # 仅保留AMD64的基础源（用于主机工具）
+          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list
+          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
           
-          sudo apt-get update
+          # 添加ARM64架构专用源（ports.ubuntu.com是ARM64官方源）
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          
+          # 更新源并安装依赖
+          sudo apt-get update -y --fix-missing
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
@@ -52,7 +59,7 @@ jobs:
           sudo cp -r unicorn-1.0.2-linux-arm64/include/* /usr/aarch64-linux-gnu/include/
           sudo cp -r unicorn-1.0.2-linux-arm64/lib/* /usr/aarch64-linux-gnu/lib/
 
-          # 安装capstone
+          # 安装capstone（交叉编译ARM64版本）
           wget https://github.com/capstone-engine/capstone/archive/refs/tags/4.0.2.tar.gz -O capstone-4.0.2.tar.gz
           tar -zxf capstone-4.0.2.tar.gz
           cd capstone-4.0.2
