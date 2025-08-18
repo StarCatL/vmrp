@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7 (Fix Unicorn Configure)
+name: ARM Linux Build for Emuelec4.7 (Fix CMake Format)
 
 on:
   workflow_dispatch:
@@ -53,36 +53,32 @@ jobs:
             git \
             cmake
 
-      - name: Build Unicorn Engine (CMake version)
+      - name: Build Unicorn Engine (Fixed CMake Command)
         run: |
           git clone https://github.com/unicorn-engine/unicorn.git
           cd unicorn
-          git checkout 1.0.3  # 切换到1.0.3版本
+          git checkout 1.0.3
           
-          # 创建构建目录
           mkdir build && cd build
           
-          # CMake配置（替代原有的./configure）
+          # 修复：确保所有CMake参数在同一行命令中，用反斜杠正确换行（无多余空格）
           cmake .. \
             -DCMAKE_SYSTEM_NAME=Linux \
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
             -DCMAKE_C_COMPILER=${{ env.TOOLCHAIN }}-gcc \
             -DCMAKE_CXX_COMPILER=${{ env.TOOLCHAIN }}-g++ \
             -DCMAKE_INSTALL_PREFIX=/usr/${{ env.TOOLCHAIN }} \
-            -DBUILD_SHARED_LIBS=OFF \  # 静态链接，避免运行时依赖问题
-            -DUNICORN_ARCH_ARM=ON \    # 仅启用ARM架构
+            -DBUILD_SHARED_LIBS=OFF \
+            -DUNICORN_ARCH_ARM=ON \
             -DUNICORN_ARCH_X86=OFF \
             -DUNICORN_ARCH_MIPS=OFF \
             -DUNICORN_ARCH_SPARC=OFF \
             -DUNICORN_ARCH_M68K=OFF \
-            -DUNICORN_BUILD_SAMPLES=OFF  # 禁用示例程序
+            -DUNICORN_BUILD_SAMPLES=OFF
           
-          # 编译并安装
           make -j$(nproc)
           sudo make install
           cd ../..
-          
-          # 更新链接库缓存
           sudo ldconfig
 
       - name: Build Capstone
