@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7 (Fixed Unicorn)
+name: ARM Linux Build for Emuelec4.7 (Final Fix)
 
 on:
   workflow_dispatch:
@@ -33,16 +33,19 @@ jobs:
           echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/${{ env.ARCH }}.list
           echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/${{ env.ARCH }}.list
 
-      - name: Install dependencies (including GLib)
+      - name: Update package index
         run: |
           sudo apt-get update -y --fix-missing || true
-          # 安装GLib（解决g_*函数缺失）和其他必要依赖
+
+      - name: Install dependencies (fixed syntax)
+        run: |
+          # 修复：确保每个包名独立一行，反斜杠后无空格/注释
           sudo apt-get install -y \
             gcc-${{ env.TOOLCHAIN }} \
             g++-${{ env.TOOLCHAIN }} \
             libsdl2-dev:${{ env.ARCH }} \
             zlib1g-dev:${{ env.ARCH }} \
-            libglib2.0-dev:${{ env.ARCH }} \  # 关键：添加GLib开发库
+            libglib2.0-dev:${{ env.ARCH }} \
             make \
             wget \
             unzip \
@@ -55,25 +58,20 @@ jobs:
         run: |
           git clone https://github.com/unicorn-engine/unicorn.git
           cd unicorn
-          # 使用较新的稳定版本（1.0.3修复了部分交叉编译问题）
           git checkout 1.0.3
-          
-          # 配置仅支持ARM架构，禁用其他架构和示例程序
           ./configure \
             --prefix=/usr/${{ env.TOOLCHAIN }} \
             --cross-prefix=${{ env.TOOLCHAIN }}- \
             --enable-static \
             --disable-shared \
-            --enable-arm \  # 仅启用ARM架构
+            --enable-arm \
             --disable-x86 \
             --disable-mips \
             --disable-sparc \
             --disable-m68k \
-            --disable-sample \  # 禁用示例程序（避免x86依赖）
+            --disable-sample \
             --extra-cflags="-I/usr/${{ env.TOOLCHAIN }}/include" \
             --extra-ldflags="-L/usr/${{ env.TOOLCHAIN }}/lib"
-          
-          # 编译并安装
           make -j$(nproc)
           sudo make install
           cd ..
@@ -92,7 +90,7 @@ jobs:
         run: |
           export CC=${{ env.TOOLCHAIN }}-gcc
           export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2"
-          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0"  # 链接GLib
+          export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0"
           
           cd mythroad && make full && cd ..
           make VMRP=1 DEBUG=0
