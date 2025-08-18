@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7 (Final Working Version)
+name: ARM Linux Build for Emuelec4.7 (Fix Dependency Conflicts)
 
 on:
   workflow_dispatch:
@@ -16,28 +16,53 @@ jobs:
         with:
           submodules: true
 
-      - name: Configure system
+      - name: Clean and reconfigure multi-arch support
         run: |
-          sudo dpkg --add-architecture ${{ env.ARCH }}
+          # 清除现有源配置
+          sudo rm -rf /etc/apt/sources.list.d/*
+          sudo rm -f /etc/apt/sources.list
+          
+          # 重新配置源（确保amd64和arm64源正确分离）
+          # 1. amd64主源（系统架构）
+          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list
+          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          
+          # 2. arm64交叉编译源（目标架构）
+          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/${{ env.ARCH }}.list
+          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/${{ env.ARCH }}.list
+          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/${{ env.ARCH }}.list
 
-      - name: Configure sources
+      - name: Update package index with fix
         run: |
-          sudo rm -f /etc/apt/sources.list.d/*.list
-          echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main universe" | sudo tee /etc/apt/sources.list
-          echo "deb [arch=${{ env.ARCH }}] http://ports.ubuntu.com/ubuntu-ports jammy main universe" | sudo tee /etc/apt/sources.list.d/${{ env.ARCH }}.list
-
-      - name: Install dependencies
-        run: |
+          # 强制更新并忽略无关错误
+          sudo apt-get clean
           sudo apt-get update -y --fix-missing || true
+
+      - name: Install critical base libraries first (解决libc依赖)
+        run: |
+          # 优先安装arm64基础库（所有依赖的根节点）
+          sudo apt-get install -y \
+            libc6:${{ env.ARCH }} \
+            libgcc-s1:${{ env.ARCH }} \
+            libstdc++6:${{ env.ARCH }} \
+            zlib1g:${{ env.ARCH }}
+
+      - name: Install remaining dependencies
+        run: |
           sudo apt-get install -y \
             gcc-${{ env.TOOLCHAIN }} \
             g++-${{ env.TOOLCHAIN }} \
             libsdl2-dev:${{ env.ARCH }} \
             zlib1g-dev:${{ env.ARCH }} \
             libglib2.0-dev:${{ env.ARCH }} \
-            make git cmake qemu-user-static
+            make \
+            git \
+            cmake \
+            qemu-user-static
 
-      - name: Build Unicorn
+      # 后续步骤（Unicorn/Capstone编译等）与之前的工作流相同
+      - name: Build Unicorn Engine (ARM-only)
         run: |
           git clone https://github.com/unicorn-engine/unicorn.git
           cd unicorn && git checkout 1.0.3
@@ -60,51 +85,27 @@ jobs:
           ./make.sh && sudo make install PREFIX=/usr/${{ env.TOOLCHAIN }}
           cd ..
 
-      - name: Fix Makefiles (核心修复)
+      - name: Fix Makefiles
         run: |
-          # 1. 修复主Makefile
-          if [ -f "Makefile" ]; then
-            # 移除所有不存在的文件
-            sed -i '/src\/mr_noparser\.c/d' Makefile
-            sed -i '/main\.c/d' Makefile
-            sed -i '/asm\/r9r10\.s/d' Makefile
-            sed -i '/asm\/globalValue\.s/d' Makefile
-            # 移除32位ARM编译选项
-            sed -i 's/-mlong-calls//g' Makefile
-          fi
-
-          # 2. 修复mythroad/Makefile
-          if [ -f "mythroad/Makefile" ]; then
-            # 替换编译器并移除无效选项
-            sed -i "s/arm-none-eabi-gcc/${{ env.TOOLCHAIN }}-gcc/" mythroad/Makefile
-            sed -i 's/-nostartfiles//g' mythroad/Makefile
-            sed -i 's/-mlong-calls//g' mythroad/Makefile
-            sed -i 's/--entry=dsm_init//g' mythroad/Makefile
-          fi
+          # 移除无效文件和编译选项
+          [ -f "Makefile" ] && sed -i -e '/src\/mr_noparser\.c/d' -e '/main\.c/d' -e '/asm\//d' -e 's/-mlong-calls//g' Makefile
+          [ -f "mythroad/Makefile" ] && sed -i -e "s/arm-none-eabi-gcc/${{ env.TOOLCHAIN }}-gcc/" -e 's/-nostartfiles//g' -e 's/--entry=dsm_init//g' mythroad/Makefile
 
       - name: Build MRP emulator
         run: |
           export CC=${{ env.TOOLCHAIN }}-gcc
           export CFLAGS="-I/usr/${{ env.TOOLCHAIN }}/include -march=armv8-a -O2 -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast"
           export LDFLAGS="-L/usr/${{ env.TOOLCHAIN }}/lib -lunicorn -lglib-2.0 -lz -lcapstone -lSDL2"
-          
-          # 编译mythroad
           cd mythroad && make full && cd ..
-          
-          # 显式指定源文件（确保无无效文件）
           make VMRP=1 DEBUG=0 \
             SRCS="src/mr_api.c src/mr_debug.c src/mr_do.c src/mr_dump.c src/mr_func.c src/mr_gc.c src/mr_mem.c src/mr_opcodes.c src/mr_object.c src/mr_state.c src/mr_string.c src/mr_table.c src/mr_tm.c src/mr_undump.c src/mr_vm.c src/mr_zio.c src/lib/mr_auxiliar.c src/lib/mr_auxlib.c src/lib/mr_baselib.c src/lib/mr_iolib_target.c src/lib/mr_socket_target.c src/lib/mr_strlib.c src/lib/mr_tablib.c src/lib/mr_tcp_target.c mythroad.c encode.c mr_pluto.c mr_unzip.c mr_base64.c mr_graphics.c mr_inflate.c string.c printf.c other.c strtol.c strtoul.c dsm.c fixR9.c md5.c mem.c"
-          
-          file ./bin/vmrp
 
-      - name: Package
+      - name: Package and upload
         run: |
           mkdir -p vmrp-portmaster/${{ env.ARCH }}
           cp ./bin/vmrp vmrp-portmaster/${{ env.ARCH }}/
           echo '{"name":"vmrp","version":"1.0","architecture":"${{ env.ARCH }}"}' > vmrp-portmaster/portmaster.json
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: vmrp-emuelec
-          path: vmrp-portmaster/
+          uses: actions/upload-artifact@v4
+          with:
+            name: vmrp-emuelec
+            path: vmrp-portmaster/
