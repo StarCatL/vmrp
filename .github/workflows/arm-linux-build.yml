@@ -1,4 +1,4 @@
-name: ARM Linux Build for Emuelec4.7 (Fix Capstone)
+name: ARM Linux Build for Emuelec4.7 (Final Capstone Fix)
 
 on:
   workflow_dispatch:
@@ -79,13 +79,18 @@ jobs:
           cd ../..
           sudo ldconfig
 
-      - name: Build Capstone (Fixed cross-compile parameter)
+      - name: Build Capstone (Manual cross-compile)
         run: |
           wget https://github.com/capstone-engine/capstone/archive/4.0.2.tar.gz -O capstone.tar.gz
           tar -zxf capstone.tar.gz
           cd capstone-4.0.2
-          # 修复：Capstone 对 ARM64 的交叉编译参数为 cross-aarch64（而非 cross-arm64）
-          ./make.sh cross-aarch64
+          
+          # 关键修复：不使用脚本的cross参数，直接指定交叉编译器
+          export CC=${{ env.TOOLCHAIN }}-gcc
+          export CXX=${{ env.TOOLCHAIN }}-g++
+          # 编译（默认配置，通过CC/CXX指定交叉编译）
+          ./make.sh
+          # 安装到交叉工具链目录
           sudo make install PREFIX=/usr/${{ env.TOOLCHAIN }}
           cd ..
 
